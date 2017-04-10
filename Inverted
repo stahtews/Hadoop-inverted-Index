@@ -1,0 +1,202 @@
+import java.io.IOException;
+import java.util.*;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Iterator;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.conf.*;
+import org.apache.hadoop.io.*;
+import org.apache.hadoop.mapred.*;
+import org.apache.hadoop.util.*;
+import java.util.Map.Entry;
+public class Inverted {
+ // Map class
+ public static class Map extends MapReduceBase implements Mapper<LongWritable, Text, Text, Text> {
+ JobConf conf;
+
+ // calling a constructor to memorize the object JobConf job
+ public void configure(JobConf job){
+ this.conf = job;
+ }
+
+ // map funtion , processes the input by using == operator to check if file contains keywords and
+counts them
+ // pre condition ,each mapper instance takes 1 file and reads the keywords sent from command line
+ // post condition ,outputs several Key value pairs of keyword and corresponding filename_count to
+Reducer .
+ public void map(LongWritable docId, Text value, OutputCollector<Text, Text> output, Reporter
+reporter) throws IOException {
+
+ // retrieve # keywords from JobConf
+ int argc = Integer.parseInt(conf.get("argc"));
+ String[] keywords = new String[argc];
+
+ //get all the keywords
+ for( int i =0 ;i < argc ; i++)
+ keywords[i] = conf.get(("keyword" + i));
+
+ //get the current file name and file content
+ FileSplit fileSplit = (FileSplit)reporter.getInputSplit();
+ String filename = fileSplit.getPath().getName();
+
+ // get the whole file content into a string
+ // break the contents into tokens
+ String line = value.toString();
+ StringTokenizer tokenizer = new StringTokenizer(line);
+ //hashmap to store the values of keyword and count
+ java.util.Map<String, Integer> hm = new HashMap<String, Integer>();
+
+ //loop through each token until the end of tokens, search if it matches one of the keywords,
+ // add key to hashmap if it is not already found , otherwise get the contents of keyword and
+ // add it back to hasmap
+ while (tokenizer.hasMoreTokens()) {
+
+ String inputKey = tokenizer.nextToken();
+ for(int i=0;i<argc;i++)
+ {
+ if(inputKey.equals(keywords[i]))
+ {
+ if(hm.containsKey(inputKey)){
+ int count = hm.get(inputKey);
+ count++;
+ hm.put(inputKey,count);
+ }
+ else {
+ hm.put(inputKey,1);
+ }
+ 
+ }
+ }
+}
+ int n = hm.size();
+ Set set = hm.entrySet();
+ if(n > 0)
+ {
+ Iterator names = set.iterator();
+
+ while(names.hasNext()) {
+ java.util.Map.Entry me = (java.util.Map.Entry)names.next();
+ String secondV = filename + "-" + me.getValue().toString();
+ Text a = new Text();
+ a.set(me.getKey().toString());
+ Text b = new Text();
+ b.set(secondV);
+ output.collect(a,b );
+ }
+ }
+ }
+
+ }
+ // Reducer class , takes key value pairs and reduce it according to key and sends data in the form of
+key value pair
+ // inpout type is Keyword(Text) , filename_count (Text)
+ // output is Keyword(Text) , filename1-sum(count)filename2-sum(count)filename3-sum(count)..(Text)
+ // pre condition , each Reducer instance takes 1 unique key and associated values
+ // post condition , Gives the output in the Text , Text format
+ public static class Reduce extends MapReduceBase implements Reducer<Text, Text, Text, Text> {
+ public void reduce(Text key, Iterator<Text> values, OutputCollector<Text, Text> output, Reporter
+reporter) throws IOException {
+ //create a hashmap to store filename and count
+ java.util.Map<String,Integer> pairTable = new HashMap<String,Integer>();
+
+ while (values.hasNext()) {
+ String compositeStringR = values.next().toString();
+ String[] compositeStringArrayR = compositeStringR.split("-");
+ String fileN = compositeStringArrayR[0];
+
+ int count =0;
+ String countTmp = compositeStringArrayR[1];
+
+ if(countTmp != null && !"".equals(countTmp))
+ count = Integer.parseInt(countTmp);
+ else
+ count =0;
+ int tempCount =0;
+ if(pairTable.containsKey(fileN))
+ {
+ tempCount = pairTable.get(fileN);
+ tempCount = tempCount + count;
+ pairTable.put(fileN, tempCount);
+ }
+ else
+ {
+ pairTable.put(fileN, count);
+ }
+
+ }
+ //ADDITIONAL WORK
+ java.util.Map<String,Integer> pairTable2 = createSortedMap(pairTable);
+ int n = pairTable2.size();
+ Set set = pairTable2.entrySet();
+ String docListText = new String();
+ Iterator<String> names = pairTable2.keySet().iterator();
+
+ while(names.hasNext()) {
+ String k = names.next();
+ int v = pairTable2.get(k);
+ docListText = docListText + " " + k + "-" + v ;
+ }
+ output.collect(key, new Text(docListText) );
+ }
+ }
+ // main class , create receives keywords or terms in args, creates JobConf object to pass parameter to
+map and reduce
+ // assigns mapper, reducer and combiner functions , specifies input and output format writes it to the
+output
+ //precondition takes arguments , input and output file path
+ //post condition writes the output if success
+ public static void main(String[] args) throws Exception {
+JobConf conf = new JobConf(Inverted.class);
+conf.setJobName("BBBBB");
+conf.setOutputKeyClass(Text.class);
+conf.setOutputValueClass(Text.class);
+conf.setMapperClass(Map.class);
+conf.setCombinerClass(Reduce.class);
+conf.setReducerClass(Reduce.class);
+conf.setInputFormat(TextInputFormat.class);
+conf.setOutputFormat(TextOutputFormat.class);
+FileInputFormat.setInputPaths(conf, new Path(args[0]));
+FileOutputFormat.setOutputPath(conf, new Path(args[1]));
+ //get number of keywords given from command line
+conf.set( "argc" , String.valueOf(args.length - 2));
+
+ // read keywords from command line
+ for( int i =0 ;i < args.length - 2 ; i++)
+ conf.set( "keyword"+ i, args[i+2] );
+
+
+ long startTime = System.currentTimeMillis();
+
+ // call runJob to execute mapreduce functions
+ JobClient.runJob(conf);
+ long endTime = System.currentTimeMillis();
+ //print the time taken to execute to command line
+ System.out.println("That took " + (endTime - startTime) + " milliseconds");
+
+ }
+
+//ADDITIONAL WORK
+//to sort the hahmap by values
+// precondition , gets the hashmap and compares two values at a time ,
+// retrieves the values as keys into temp map and sorts it, returns the sorted key value hashmap
+public static java.util.Map<String, Integer> createSortedMap(java.util.Map<String, Integer> passedMap)
+{
+ List<Entry<String, Integer>> entryList = new ArrayList<Entry<String, Integer>>(passedMap.entrySet());
+ Collections.sort(entryList, new Comparator<Entry<String, Integer>>() {
+ @Override
+ public int compare(Entry<String, Integer> e1, Entry<String, Integer> e2) {
+ if (!e1.getValue().equals(e2.getValue())) {
+ return e1.getValue().compareTo(e2.getValue()) * -1; // The * -1 reverses the order.
+ } else {
+ return e1.getKey().compareTo(e2.getKey());
+ }
+ }
+ });
+ java.util.Map<String, Integer> orderedMap = new LinkedHashMap<String, Integer>();
+ for (Entry<String, Integer> entry : entryList) {
+ orderedMap.put(entry.getKey(), entry.getValue());
+ }
+ return orderedMap;
+}
+
+}
